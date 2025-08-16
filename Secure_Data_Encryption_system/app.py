@@ -1,11 +1,13 @@
 import streamlit as st
-import json
 import os
-import hashlib
 from cryptography.fernet import Fernet
 
-# ---------- Helpers ----------
+# ----------------------------
+# Encryption utilities
+# ----------------------------
+
 def load_key():
+    """Load the secret key from file or generate one if not exists"""
     if not os.path.exists("secret.key"):
         key = Fernet.generate_key()
         with open("secret.key", "wb") as key_file:
@@ -15,134 +17,66 @@ def load_key():
             key = key_file.read()
     return key
 
-def get_fernet():
-    return Fernet(load_key())
+def get_cipher():
+    key = load_key()
+    return Fernet(key)
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def store_data(key, value):
+    cipher = get_cipher()
+    encrypted_value = cipher.encrypt(value.encode())
+    with open("data.txt", "a") as f:
+        f.write(f"{key}:{encrypted_value.decode()}\n")
 
-def load_data():
-    if os.path.exists("stored_data.json"):
-        with open("stored_data.json", "r") as f:
-            return json.load(f)
-    return {}
+def retrieve_data(key):
+    if not os.path.exists("data.txt"):
+        return None
+    cipher = get_cipher()
+    with open("data.txt", "r") as f:
+        for line in f:
+            stored_key, stored_value = line.strip().split(":")
+            if stored_key == key:
+                return cipher.decrypt(stored_value.encode()).decode()
+    return None
 
-def save_data(data):
-    with open("stored_data.json", "w") as f:
-        json.dump(data, f, indent=4)
+# ----------------------------
+# Streamlit App
+# ----------------------------
 
-# ---------- Init Session State ----------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "username" not in st.session_state:
-    st.session_state.username = None
-if "view" not in st.session_state:
-    st.session_state.view = "Login"
+st.title("🔐 Secure Data Encryption System")
 
-# ---------- Pages ----------
-def login_page():
-    st.title("🔐 Secure Data Encryption System")
-    st.subheader("Login")
+menu = ["Store Data", "Retrieve Data"]
+choice = st.sidebar.selectbox("Choose Action", menu)
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+# Store Data Section
+if choice == "Store Data":
+    st.subheader("Store Secure Data")
+    key = st.text_input("Enter a key (identifier)")
+    value = st.text_input("Enter a value to encrypt")
 
-    if st.button("Login"):
-        users = load_data()
-        if username in users and users[username]["password"] == hash_password(password):
-            st.session_state.logged_in = True
-            st.session_state.username = username
-            st.session_state.view = "Home"
+    if st.button("Store Data"):
+        if key and value:
+            store_data(key, value)
+            st.session_state["last_stored"] = f"✅ Stored '{key}: {value}' successfully!"
         else:
-            st.error("❌ Invalid username or password")
+            st.session_state["last_stored"] = "⚠️ Please provide both key and value."
 
-    if st.button("Create New Account"):
-        st.session_state.view = "Register"
+    if "last_stored" in st.session_state:
+        st.success(st.session_state["last_stored"])
 
-def register_page():
-    st.title("📝 Create Account")
+# Retrieve Data Section
+elif choice == "Retrieve Data":
+    st.subheader("Retrieve Secure Data")
+    key = st.text_input("Enter the key to retrieve value")
 
-    username = st.text_input("New Username")
-    password = st.text_input("New Password", type="password")
-
-    if st.button("Register"):
-        users = load_data()
-        if username in users:
-            st.error("⚠️ Username already exists")
+    if st.button("Retrieve Data"):
+        if key:
+            result = retrieve_data(key)
+            if result:
+                st.session_state["last_retrieved"] = f"🔎 Value for '{key}': {result}"
+            else:
+                st.session_state["last_retrieved"] = f"❌ No data found for key: {key}"
         else:
-            users[username] = {"password": hash_password(password), "data": {}}
-            save_data(users)
-            st.success("✅ Account created successfully!")
-            st.session_state.view = "Login"
+            st.session_state["last_retrieved"] = "⚠️ Please enter a key."
 
-    if st.button("Back to Login"):
-        st.session_state.view = "Login"
-
-def home_page():
-    st.title("🏠 Home")
-    st.write(f"Welcome, **{st.session_state.username}**!")
-
-    if st.button("🔒 Store Data"):
-        st.session_state.view = "Store Data"
-
-    if st.button("📂 Retrieve Data"):
-        st.session_state.view = "Retrieve Data"
-
-    if st.button("🚪 Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.session_state.view = "Login"
-
-def store_data_page():
-    st.title("🔒 Store Encrypted Data")
-
-    data_name = st.text_input("Data Label")
-    data_value = st.text_area("Enter Data")
-
-    if st.button("Save"):
-        if data_name and data_value:
-            fernet = get_fernet()
-            encrypted = fernet.encrypt(data_value.encode()).decode()
-
-            users = load_data()
-            users[st.session_state.username]["data"][data_name] = encrypted
-            save_data(users)
-
-            st.success("✅ Data saved securely!")
-        else:
-            st.error("⚠️ Please enter both label and data")
-
-    if st.button("⬅ Back"):
-        st.session_state.view = "Home"
-
-def retrieve_data_page():
-    st.title("📂 Retrieve Data")
-
-    users = load_data()
-    data_items = users[st.session_state.username]["data"]
-
-    if not data_items:
-        st.warning("⚠️ No data stored yet.")
-    else:
-        choice = st.selectbox("Select Data", list(data_items.keys()))
-        if choice:
-            fernet = get_fernet()
-            decrypted = fernet.decrypt(data_items[choice].encode()).decode()
-            st.text_area("Decrypted Data", decrypted, height=150)
-
-    if st.button("⬅ Back"):
-        st.session_state.view = "Home"
-
-# ---------- Router ----------
-if not st.session_state.logged_in:
-    if st.session_state.view == "Login":
-        login_page()
-    elif st.session_state.view == "Register":
-        register_page()
-else:
-    if st.session_state.view == "Home":
-        home_page()
-    elif st.session_state.view == "Store Data":
-        store_data_page()
-    elif st.session_state.view == "Retrieve Data":
-        retrieve_data_page()
+    if "last_retrieved" in st.session_state:
+        st.info(st.session_state["last_retrieved"])
